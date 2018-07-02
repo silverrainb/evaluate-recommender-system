@@ -1,0 +1,357 @@
+---
+output:
+pdf_document: default
+html_document: default
+---
+<style>
+  p.comment {
+    background-color: #DBDBDB;
+      padding: 10px;
+    border: 1px solid black;
+    margin-left: 25px;
+    border-radius: 5px;
+    font-style: italic;
+  }
+</style>
+  
+  
+<div class='alert alert-info'>
+<h2 class='display-3 text-uppercase'>Evaluate recommender system</h2>
+#### Recommender System
+##### CUNY MSDS DATA 643
+#
+##### Date: 2018/07/01
+##### Author: Rose Koh
+
+</div>
+  
+## {.tabset}
+  
+  
+### Introduction
+
+#### Goal
+<div class="alert alert-info" role="alert">  
+
+Practice working with accuracy and other recommender system metrics.
+In this assignment you’re asked to do at least one or (if you like) both of the following: 
+  
+* Work in a small group, and/or  
+* Choose a different dataset to work with from your previous projects
+</div>
+
+#### Accuracy and Beyond
+
+<div class="alert alert-info" role="alert">  
+
+1. As in your previous assignments, compare the accuracy of at least two recommender system algorithms against your offline data.
+2. Implement support for at least one business or user experience goal such as increased serendipity, novelty, or diversity.
+3. Compare and report on any change in accuracy before and after you’ve made the change in #2. 
+4. As part of your textual conclusion, discuss one or more additional experiments that could be performed and/or metrics that could be evaluated only if online evaluation was possible.  Also, briefly propose how you would design a reasonable online evaluation environment.
+
+</div>
+
+### Data
+
+```{r echo=FALSE, include=FALSE}
+
+library(recommenderlab)
+library(ggplot2)
+library(xlsx)
+library(data.table)
+library(knitr)
+```
+
+#### Info
+
+<div class="alert alert-info" role="alert">  
+For this week project, we are using subset of `Jester` data from http://eigentaste.berkeley.edu/dataset/
+
+Jester was developed by Ken Goldberg and his group at UC Berkeley and contains around 6 million ratings of 150 jokes. 
+Compared to the other datasets that we use, Jester is unique in two aspects: 
+
+* it uses continuous ratings from -10 to 10 
+* it has the highest ratings density by an order of magnitude. 
+
+Jester has a density of about 30%, meaning that on average a user has rated 30% of all the jokes.
+
+</div>
+
+#### Preprocessing
+
+<div class="alert alert-info" role="alert">  
+
+* remove the first column that contains number of ratings count per joke
+* change 99 to NA
+
+</div>
+
+```{r}
+jester <- read.xlsx2("data/jester-data-2.xls", "jester-data-2-new", header = F, 
+                     colClasses='numeric',stringsAsFactors=FALSE)
+
+# remove first column
+jester <- jester[ , -1]
+
+# Missing value to NA
+jester[jester==99] <- NA
+
+# Check NA table
+table(is.na(jester))
+
+total = nrow(jester) * ncol(jester)
+count.nan = sum(is.na(jester))
+sparsity = round((total-count.nan)/total,4)
+
+# index
+names(jester)[1:100] <- paste("item", 1:100, sep="")
+
+#user <- c(seq(1, length(jester)))
+#test <- data.frame(user,jester)
+
+# str(jester)
+# value chr -> num
+fwrite(jester,"jester")
+jester <- fread("jester",colClasses="numeric")
+# str(jester)
+
+# Subset and create matrix
+sample <- jester[sample.int(nrow(jester), 5000, replace=FALSE), ]
+matrix <- as.matrix(sample)
+real.rating.mat <- as(matrix, "realRatingMatrix")
+real.rating.mat
+```
+
+#### Sparsity and distribution
+
+<div class="alert alert-info" role="alert">  
+This data contains users who have rated more than 36 jokes, thus the sparsity of the matrix should be high. The NA table shows that the sparsity is `r sparsity`.
+</div>
+
+#### Visualization
+
+```{r}
+# Distribution of ratings
+hist(getRatings(real.rating.mat), col="skyblue", main="Distribution of Jester Ratings", xlab="Rating")
+
+# Average distribution of ratings
+avg.rating <- colMeans(na.omit(sample))
+hist(avg.rating, col="skyblue", main="Distribution of Average Jester Ratings", xlab="Average Rating")
+```
+
+<div class="alert alert-info" role="alert">  
+The histogram of the jester sample shows that mostly given ratings are positive. We can detect a left skew distribution that is near normal distribution.
+</div>
+
+### Evaluation and Model Selection
+
+#### Evaluation
+
+```{r}
+items.to.keep <- 15
+rating.threshold <- 1
+number.of.trial <- 3
+method = "split"
+eval.method <- evaluationScheme(real.rating.mat, method=method, train=0.75, 
+                                k=number.of.trial, 
+                                given=items.to.keep, 
+                                goodRating=rating.threshold )
+
+eval.method
+```
+
+<div class="alert alert-info" role="alert">
+
+The selection of model is compared between cosine and pearson and the three normalization options (NULL, center, z-score). A Precision-recall and ROC curve is visualized as the means to select the effective method. 
+</div>
+
+#### Model Selection
+
+
+```{r}
+models <- list(
+  UBCF.cos.null = list(name = "UBCF", param = list(method = "cosine", normalize = NULL)),
+  UBCF.prs.null = list(name = "UBCF", param = list(method = "pearson", normalize = NULL)),
+  UBCF.cos.center = list(name = "UBCF", param = list(method = "cosine", normalize = "center")),
+  UBCF.prs.center = list(name = "UBCF", param = list(method = "pearson", normalize = "center")),
+  UBCF.cos.z = list(name = "UBCF", param = list(method = "cosine", normalize = "Z-score")),
+  UBCF.prs.z = list(name = "UBCF", param = list(method = "pearson", normalize = "Z-score"))
+)
+
+eval.results <- suppressWarnings(evaluate(x = eval.method, method = models, n = seq(10, 100, 10)))
+
+plot(eval.results, "prec/rec", annotate = T, main = "UBCF-Precision-recall")
+title("UBCF-Precision-recall")
+
+plot(eval.results, annotate = 1, legend = "topleft") 
+title("UBCF-ROC curve")
+```
+
+```{r}
+models <- list(
+  IBCF.cos.null = list(name = "IBCF", param = list(method = "cosine", normalize = NULL)),
+  IBCF.prs.null = list(name = "IBCF", param = list(method = "pearson", normalize = NULL)),
+  IBCF.cos.center = list(name = "IBCF", param = list(method = "cosine", normalize = "center")),
+  IBCF.prs.center = list(name = "IBCF", param = list(method = "pearson", normalize = "center")),
+  IBCF.cos.z = list(name = "IBCF", param = list(method = "cosine", normalize = "Z-score")),
+  IBCF.prs.z = list(name = "IBCF", param = list(method = "pearson", normalize = "Z-score"))
+)
+
+eval.results <- suppressWarnings(evaluate(x = eval.method, method = models, n = seq(10, 100, 10)))
+
+plot(eval.results, "prec/rec", annotate = T, main = "IBCF-Precision-recall")
+title("IBCF-Precision-recall")
+plot(eval.results, annotate = 1, legend = "topleft") 
+title("IBCF-ROC curve")
+
+```
+
+
+```{r}
+models <- list(
+  POPULAR.cos.null = list(name = "POPULAR", param = list(method = "cosine", normalize = NULL)),
+  POPULAR.prs.null = list(name = "POPULAR", param = list(method = "pearson", normalize = NULL)),
+  POPULAR.cos.center = list(name = "POPULAR", param = list(method = "cosine", normalize = "center")),
+  POPULAR.prs.center = list(name = "POPULAR", param = list(method = "pearson", normalize = "center")),
+  POPULAR.cos.z = list(name = "POPULAR", param = list(method = "cosine", normalize = "Z-score")),
+  POPULAR.prs.z = list(name = "POPULAR", param = list(method = "pearson", normalize = "Z-score"))
+)
+
+eval.results <- suppressWarnings(evaluate(x = eval.method, method = models, n = seq(10, 100, 10)))
+
+plot(eval.results, "prec/rec", annotate = T, main = "POPULAR-Precision-recall")
+title("Popular-Precision-recall")
+
+plot(eval.results, annotate = 1, legend = "topleft") 
+title("Popular-ROC curve")
+
+```
+
+```{r}
+models <- list(
+  RANDOM.cos.null = list(name = "RANDOM", param = list(method = "cosine", normalize = NULL)),
+  RANDOM.prs.null = list(name = "RANDOM", param = list(method = "pearson", normalize = NULL)),
+  RANDOM.cos.center = list(name = "RANDOM", param = list(method = "cosine", normalize = "center")),
+  RANDOM.prs.center = list(name = "RANDOM", param = list(method = "pearson", normalize = "center")),
+  RANDOM.cos.z = list(name = "RANDOM", param = list(method = "cosine", normalize = "Z-score")),
+  RANDOM.prs.z = list(name = "RANDOM", param = list(method = "pearson", normalize = "Z-score"))
+)
+
+eval.results <- suppressWarnings(evaluate(x = eval.method, method = models, n = seq(10, 100, 10)))
+
+plot(eval.results, "prec/rec", annotate = T, main = "RANDOM-Precision-recall")
+title("Random-Precision-recall")
+
+plot(eval.results, annotate = 1, legend = "topleft") 
+title("Random-ROC curve")
+
+```
+
+
+### Prediction and Accuracy
+
+#### Prediction
+
+```{r warning = F, message = F}
+# user base cf
+ubcf <- Recommender(getData(eval.method, "train"), "UBCF")
+
+# item base cf
+ibcf <- Recommender(getData(eval.method, "train"), "IBCF")
+
+# serendipity and novelty
+popular <- Recommender(getData(eval.method, "train"), "POPULAR")
+
+random <- Recommender(getData(eval.method, "train"), "RANDOM")
+```
+
+```{r warning = F, message = F}
+# user base cf
+ubcf.after <- Recommender(getData(eval.method, "train"), "UBCF", parameter = list(method = "pearson", normalize = "Z-score"))
+
+# item base cf
+ibcf.after <- Recommender(getData(eval.method, "train"), "IBCF", parameter = list(method = "cosine", normalize = "Z-score"))
+
+# serendipity and novelty
+popular.after <- Recommender(getData(eval.method, "train"), "POPULAR", parameter = list(method = "pearson", normalize = "Z-score"))
+
+random.after <- Recommender(getData(eval.method, "train"), "RANDOM", parameter = list(method = "pearson", normalize = "Z-score"))
+```
+
+```{r warning = F, message = F}
+ubcf.pred <- predict(ubcf, getData(eval.method, "known"), type="ratings")
+ibcf.pred <- predict(ibcf, getData(eval.method, "known"), type="ratings")
+pop.pred <- predict(popular, getData(eval.method, "known"), type="ratings")
+rand.pred <- predict(random, getData(eval.method, "known"), type="ratings")
+
+ubcf.pred.after <- predict(ubcf.after, getData(eval.method, "known"), type="ratings")
+ibcf.pred.after <- predict(ibcf.after, getData(eval.method, "known"), type="ratings")
+pop.pred.after <- predict(popular.after, getData(eval.method, "known"), type="ratings")
+rand.pred.after <- predict(random.after, getData(eval.method, "known"), type="ratings")
+```
+
+#### Accuracy
+
+```{r}
+error <- rbind(
+  ubcf = calcPredictionAccuracy(ubcf.pred, getData(eval.method, "unknown")), 
+  ubcf.after = calcPredictionAccuracy(ubcf.pred.after, getData(eval.method, "unknown")), 
+  ibcf = calcPredictionAccuracy(ibcf.pred, getData(eval.method, "unknown")), 
+  ibcf.after = calcPredictionAccuracy(ibcf.pred.after, getData(eval.method, "unknown")), 
+  rand = calcPredictionAccuracy(rand.pred, getData(eval.method, "unknown")), 
+  rand.after = calcPredictionAccuracy(rand.pred.after, getData(eval.method, "unknown")), 
+  pop = calcPredictionAccuracy(pop.pred, getData(eval.method, "unknown")),
+  pop.after = calcPredictionAccuracy(pop.pred.after, getData(eval.method, "unknown"))
+)
+
+kable(error)
+```
+
+
+### Conclusion
+
+#### Conclusion
+
+<div class="alert alert-info" role="alert">  
+
+In this project, we have implemented four algorithms for recommender system using `recommenderlab` package. The implemented models are as follows:
+
+  * user base collaborative filtering
+  * item base collaborative filtering
+  * popular method for novelty
+  * random method for serendipity
+
+The final error rate table contains before and after optimizing numeric parameters for algorithms.  The results suggest that the most suitable model is `Popular`, using pearson correlation as distance function with z-score normalization, followed by `UBCF` model, using pearson correlation as distance function with z-score normalization. 
+
+`Precision` is the percentage of recommended items that have been rated.  `Recall` is the percentage of rated items that have been recommended.  As the precision decreases, we can state that a small percentage of rated items are recommended. 
+
+The `ROC` table shows the relationship between the `TP` and `FP` rate. For maximum accuracy, it would be wise to experiment with various techniques such as normalization to improve the accuracy.  If we wanted to maximize serendipity and trade off the accuracy, the algorithm choice would be `Popular` model.
+
+To improve the algorithms, further optimizing numeric parameters would be an option such as hyper parameter tuning in order to achieve the highest recall or precision.  It is important to evaluate different techniques using different methods.  Sophisticated optimization of numeric parameter is essential in order to elaborate the system. Depending on the objective of the business, the parameters will vary.
+
+This dataset was offline and the recommender system was designed based on offline accuracy.  Thus the predictions are generated using pre-existing record of ratings, without the recommender system ever being used.  If it were to be implemented online, the accuracy should be measured by recommender system in present, predicting or recommending an item as users view them.
+
+The metrics for recommender system can vary depending on business objective.  It could be high click through rate for interests in items or actual purchase that makes revenue for the business.  To find which recommender system to implement in business, it would highly depend on the business objective metric.  Thus whichever highest performance shows, should be selected. 
+</div>
+
+
+### Reference
+
+#### Reference
+<div class="alert alert-info" role="alert">  
+
+https://gab41.lab41.org/the-nine-must-have-datasets-for-investigating-recommender-systems-ce9421bf981c
+
+https://medium.com/@himanshuagarwal1395/setting-up-environment-variables-in-macos-sierra-f5978369b255
+
+https://conda.io/docs/user-guide/tasks/manage-environments.html#saving-environment-variables
+
+http://datapandas.com/index.php/2016/08/21/importerror-no-module-named-scikits-python-fix-jupyter-notebook/
+
+https://www.quora.com/What-metrics-are-used-for-evaluating-recommender-systems
+
+https://gab41.lab41.org/recommender-systems-its-not-all-about-the-accuracy-562c7dceeaff
+
+https://github.com/Lab41/hermes/blob/master/src/algorithms/performance_metrics.py
+
+</div>
